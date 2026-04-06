@@ -50,28 +50,68 @@ let isDrawingWire = false, wireFromId = null, wireFromAnchor = null, tempWire = 
 
 // Calculator
 let calcCurrent = '0', calcFull = '', calcHistory = [], calcReset = false;
-let saveTimer = null;
+let stateSaveTimer = null;
+
+// Supabase & Realtime Setup
+const supabaseClient = window.supabase.createClient(
+    'https://feswqkmphbqvcsuixqje.supabase.co',
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZlc3dxa21waGJxdmNzdWl4cWplIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU0Nzg1MjksImV4cCI6MjA5MTA1NDUyOX0.hW9XImiMv5d-8i4k1X6lw_LXL-hZWhQor22lDcjXIOo'
+);
+let currentRoom = null;
+let realtimeChannel = null;
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 canvas.style.width  = CANVAS_W + 'px';
 canvas.style.height = CANVAS_H + 'px';
 
-(function init() {
-    const saved = loadState();
-    if (saved) {
-        panX = saved.panX ?? panX;
-        panY = saved.panY ?? panY;
-        zoom = saved.zoom ?? 1;
-        highestZ = saved.highestZ ?? 10;
-        calcHistory = saved.calcHistory ?? [];
-        if (saved.budgetNote && calcBudArea) calcBudArea.value = saved.budgetNote;
-        if (saved.notes) saved.notes.forEach(createNoteEl);
-        if (saved.connections) {
-            connections = saved.connections;
-            drawConnections();
-        }
-        renderHistory();
+// Room UI
+const roomManager = document.getElementById('room-manager');
+const appContent = document.getElementById('app-content');
+const createRoomBtn = document.getElementById('create-room-btn');
+const joinCodeInp = document.getElementById('join-code');
+const joinRoomBtn = document.getElementById('join-room-btn');
+const roomCodeDisplay = document.getElementById('room-code-display');
+const leaveRoomBtn = document.getElementById('leave-room-btn');
+const joinError = document.getElementById('join-error');
+
+createRoomBtn.addEventListener('click', async () => {
+    const code = Math.random().toString(36).substring(2, 8).toUpperCase();
+    await enterRoom(code);
+});
+joinRoomBtn.addEventListener('click', async () => {
+    const code = joinCodeInp.value.trim().toUpperCase();
+    if(code.length > 0) await enterRoom(code);
+});
+leaveRoomBtn.addEventListener('click', () => location.reload());
+
+async function enterRoom(code) {
+    currentRoom = code;
+    roomCodeDisplay.innerText = code;
+    roomManager.style.display = 'none';
+    appContent.classList.remove('hidden');
+
+    const { data: items } = await supabaseClient
+        .from('canvas_items')
+        .select('*')
+        .eq('room_id', code);
+    
+    if (items) {
+        items.forEach(item => {
+            if (item.type === 'note') createNoteEl(item.data, true);
+            if (item.type === 'connection') connections.push(item.data);
+            if (item.type === 'state') {
+                panX = item.data.panX ?? panX;
+                panY = item.data.panY ?? panY;
+                zoom = item.data.zoom ?? 1;
+                highestZ = item.data.highestZ ?? 10;
+                calcHistory = item.data.calcHistory ?? [];
+                if (item.data.budgetNote && calcBudArea) calcBudArea.value = item.data.budgetNote;
+            }
+        });
     }
+    
+    drawConnections();
+    renderHistory();
     applyTransform();
     updateZoomLabel();
     setupPan();
@@ -79,11 +119,74 @@ canvas.style.height = CANVAS_H + 'px';
     setupGlobal();
     setupCalc();
     setupExport();
-    // Expose globals for context menu (outside DOMContentLoaded scope)
-    window.__connections = connections;
-    window.__redrawConnections = drawConnections;
-    window.__triggerSave = triggerSave;
-})();
+
+    window.__deleteConnection = id => {
+        connections = connections.filter(c => c.id !== id);
+        drawConnections(); deleteSync('connection', id);
+    };
+    window.__deleteWaypoint = (connId, wpIdx) => {
+        const conn = connections.find(c => c.id === connId);
+        if (conn) {
+            conn.waypoints.splice(wpIdx, 1);
+            drawConnections(); syncConnection(conn);
+        }
+    };
+    window.__addWaypoint = (connId, x, y) => {
+        const conn = connections.find(c => c.id === connId);
+        if (conn) {
+            conn.waypoints = conn.waypoints || [];
+            conn.waypoints.push({ x, y });
+            drawConnections(); syncConnection(conn);
+        }
+    };
+
+    realtimeChannel = supabaseClient.channel(`room:${code}`)
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'canvas_items', filter: `room_id=eq.${code}` }, handleRealtimeEvent)
+        .subscribe();
+}
+
+function handleRealtimeEvent(payload) {
+    const { eventType, new: newItem, old: oldItem } = payload;
+    if (eventType === 'DELETE') {
+        if (oldItem.type === 'note') {
+            const el = canvas.querySelector(`.note[data-id="${oldItem.id}"]`);
+            if (el) el.remove();
+        } else if (oldItem.type === 'connection') {
+            connections = connections.filter(c => c.id !== oldItem.id);
+            drawConnections();
+        }
+        return;
+    }
+    
+    if (newItem.type === 'note') {
+        const existing = canvas.querySelector(`.note[data-id="${newItem.id}"]`);
+        if (existing) {
+            existing.style.left = newItem.data.x + 'px';
+            existing.style.top = newItem.data.y + 'px';
+            if (newItem.data.width) existing.style.width = newItem.data.width;
+            if (newItem.data.height) existing.style.height = newItem.data.height;
+            existing.style.zIndex = newItem.data.zIndex;
+            existing.dataset.color = newItem.data.color;
+            existing.style.background = `var(--note-${newItem.data.color})`;
+            const contentEl = existing.querySelector('.note-content');
+            if (document.activeElement !== contentEl) contentEl.innerHTML = newItem.data.content || '';
+        } else {
+            createNoteEl(newItem.data, true);
+        }
+    } else if (newItem.type === 'connection') {
+        const idx = connections.findIndex(c => c.id === newItem.id);
+        if (idx !== -1) connections[idx] = newItem.data;
+        else connections.push(newItem.data);
+        drawConnections();
+    } else if (newItem.type === 'state') {
+        calcHistory = newItem.data.calcHistory ?? calcHistory;
+        if (newItem.data.budgetNote !== undefined && calcBudArea && document.activeElement !== calcBudArea) {
+            calcBudArea.value = newItem.data.budgetNote;
+        }
+        renderHistory();
+    }
+}
+
 
 // ─── TRANSFORM ────────────────────────────────────────────────────────────────
 function applyTransform() {
@@ -129,35 +232,38 @@ function frameAll() {
     triggerSave();
 }
 
-// ─── SAVE / LOAD ──────────────────────────────────────────────────────────────
-function triggerSave() {
-    clearTimeout(saveTimer);
-    saveTimer = setTimeout(saveAll, 500);
+// ─── SYNC ─────────────────────────────────────────────────────────────────────
+function syncState() {
+    if(!currentRoom) return;
+    clearTimeout(stateSaveTimer);
+    stateSaveTimer = setTimeout(() => {
+        supabaseClient.from('canvas_items').upsert({
+            id: 'state_' + currentRoom, room_id: currentRoom, type: 'state',
+            data: { panX, panY, zoom, highestZ, calcHistory, budgetNote: calcBudArea?.value || '' }
+        }).then();
+    }, 500);
 }
-function saveAll() {
-    const notesData = [];
-    canvas.querySelectorAll('.note').forEach(el => {
-        notesData.push({
-            id: el.dataset.id,
-            x: parseFloat(el.style.left) || 0,
-            y: parseFloat(el.style.top) || 0,
-            width: el.style.width, height: el.style.height,
-            content: el.querySelector('.note-content').innerHTML,
-            color: el.dataset.color || 'default',
-            zIndex: parseInt(el.style.zIndex) || 10,
-            isImage: el.classList.contains('image-note')
-        });
-    });
-    localStorage.setItem('freeCanvasV4', JSON.stringify({
-        notes: notesData, connections, panX, panY, zoom, highestZ,
-        calcHistory, budgetNote: calcBudArea?.value || ''
-    }));
+function syncNote(noteEl) {
+    if(!currentRoom) return;
+    const id = noteEl.dataset.id;
+    const data = {
+        id, x: parseFloat(noteEl.style.left) || 0, y: parseFloat(noteEl.style.top) || 0,
+        width: noteEl.style.width, height: noteEl.style.height,
+        content: noteEl.querySelector('.note-content').innerHTML,
+        color: noteEl.dataset.color || 'default', zIndex: parseInt(noteEl.style.zIndex) || 10,
+        isImage: noteEl.classList.contains('image-note')
+    };
+    supabaseClient.from('canvas_items').upsert({ id, room_id: currentRoom, type: 'note', data }).then();
 }
-function loadState() {
-    try { return JSON.parse(localStorage.getItem('freeCanvasV4')); }
-    catch(e) { return null; }
+function syncConnection(conn) {
+    if(!currentRoom) return;
+    supabaseClient.from('canvas_items').upsert({ id: conn.id, room_id: currentRoom, type: 'connection', data: conn }).then();
 }
-
+function deleteSync(type, id) {
+    if(!currentRoom) return;
+    supabaseClient.from('canvas_items').delete().eq('id', id).then();
+}
+window.triggerSave = syncState; // Legacy alias fallback
 // ─── EDGE ANCHOR MATH ─────────────────────────────────────────────────────────
 // Returns the point on the note's border closest to (cmx,cmy) in canvas-space
 function getEdgeAnchor(noteEl, cmx, cmy) {
@@ -250,7 +356,7 @@ function drawConnections() {
             e.stopPropagation();
             connections = connections.filter(c => c.id !== conn.id);
             drawConnections();
-            triggerSave();
+            deleteSync('connection', conn.id);
         });
         // Right-click wire → context menu
         path.addEventListener('contextmenu', e => {
@@ -285,7 +391,7 @@ function drawConnections() {
                     wpDragging=false;
                     document.removeEventListener('mousemove',onMove);
                     document.removeEventListener('mouseup',onUp);
-                    triggerSave();
+                    syncConnection(conn);
                 };
                 document.addEventListener('mousemove',onMove);
                 document.addEventListener('mouseup',onUp);
@@ -295,7 +401,7 @@ function drawConnections() {
                 ev.stopPropagation();
                 conn.waypoints.splice(idx,1);
                 drawConnections();
-                triggerSave();
+                syncConnection(conn);
             });
             // Right-click pin → context menu
             circle.addEventListener('contextmenu', ev => {
@@ -457,7 +563,7 @@ function onWireUp(e) {
         const dup=connections.find(c=>c.from===wireFromId&&c.to===target.dataset.id);
         if (!dup) {
             connections.push({id:'c'+Date.now(),from:wireFromId,fromAnchor:wireFromAnchor,to:target.dataset.id,toAnchor,waypoints:[]});
-            drawConnections(); triggerSave();
+            drawConnections(); syncConnection(conn);
         }
     }
 }
@@ -466,9 +572,9 @@ function onWireUp(e) {
 function createNewNote(content='', x=300, y=300) {
     const id='n'+Date.now()+'_'+Math.random().toString(36).slice(2,6);
     createNoteEl({id,x,y,width:'',height:'',content,color:'default',zIndex:++highestZ,isImage:false});
-    triggerSave(); return id;
+    return id;
 }
-function createNoteEl(data) {
+function createNoteEl(data, skipSync=false) {
     const clone=noteTemplate.content.cloneNode(true);
     const el=clone.querySelector('.note');
     el.dataset.id=data.id;
@@ -481,6 +587,7 @@ function createNoteEl(data) {
     setupNoteEvents(el);
     setupDragResize(el);
     canvas.appendChild(el);
+    if(!skipSync) syncNote(el);
 }
 
 // ─── NOTE EVENTS ─────────────────────────────────────────────────────────────
@@ -490,15 +597,15 @@ function setupNoteEvents(el) {
     const colorBtn = el.querySelector('.color-btn');
     const picker   = el.querySelector('.color-picker');
 
-    content.addEventListener('input', triggerSave);
-    content.addEventListener('blur', triggerSave);
+    content.addEventListener('input', () => syncNote(el));
+    content.addEventListener('blur', () => syncNote(el));
 
     delBtn.addEventListener('click', ()=>{
         el.style.cssText+=';transition:all 0.2s;transform:scale(0.8);opacity:0';
         setTimeout(()=>{
             const id=el.dataset.id;
             connections=connections.filter(c=>c.from!==id&&c.to!==id);
-            drawConnections(); el.remove(); triggerSave();
+            drawConnections(); el.remove(); deleteSync('note', id);
         },210);
     });
 
@@ -508,7 +615,7 @@ function setupNoteEvents(el) {
     el.querySelectorAll('.color-swatch').forEach(sw=>sw.addEventListener('click',e=>{
         e.stopPropagation();
         const c=sw.dataset.color; el.dataset.color=c;
-        el.style.background=`var(--note-${c})`; picker.classList.add('hidden'); triggerSave();
+        el.style.background=`var(--note-${c})`; picker.classList.add('hidden'); syncNote(el);
     }));
 
     el.addEventListener('mousedown', e=>{
@@ -555,7 +662,7 @@ function setupDragResize(el) {
         dragging=false; el.classList.remove('dragging');
         document.removeEventListener('mousemove',doDrag); document.removeEventListener('mouseup',endDrag);
         document.removeEventListener('touchmove',doDrag); document.removeEventListener('touchend',endDrag);
-        triggerSave();
+        syncNote(el);
     }
     header.addEventListener('mousedown',startDrag);
     header.addEventListener('touchstart',startDrag,{passive:false});
@@ -580,7 +687,7 @@ function setupDragResize(el) {
         resizing=false;
         document.removeEventListener('mousemove',doResize); document.removeEventListener('mouseup',endResize);
         document.removeEventListener('touchmove',doResize); document.removeEventListener('touchend',endResize);
-        triggerSave();
+        syncNote(el);
     }
     resizer.addEventListener('mousedown',startResize);
     resizer.addEventListener('touchstart',startResize,{passive:false});
@@ -622,7 +729,7 @@ function setupCalc() {
     calcClearBtn.addEventListener('click',()=>{ calcHistory=[]; renderHistory(); triggerSave(); });
 
     // Budget auto-save
-    calcBudArea?.addEventListener('input',()=>{ localStorage.setItem('freeCanvasBudget',calcBudArea.value); });
+    calcBudArea?.addEventListener('input',()=>{ syncState(); });
 
     // Copy buttons
     copyResultBtn?.addEventListener('click',()=>{
@@ -882,14 +989,7 @@ function setupExport() {
         if (!ctxTarget || ctxTarget.type !== 'wire') return;
         const { connId, clickX, clickY } = ctxTarget;
         hideMenu();
-        // Find connection and add waypoint
-        const conn = window.__connections?.find(c => c.id === connId);
-        if (conn) {
-            conn.waypoints = conn.waypoints || [];
-            conn.waypoints.push({ x: clickX, y: clickY });
-            window.__redrawConnections?.();
-            window.__triggerSave?.();
-        }
+        window.__addWaypoint?.(connId, clickX, clickY);
     });
 
     ctxDel.addEventListener('click', () => {
@@ -900,12 +1000,9 @@ function setupExport() {
             const btn = t.el.querySelector('.delete-btn');
             btn?.click();
         } else if (t.type === 'wire') {
-            window.__connections = window.__connections?.filter(c => c.id !== t.connId);
-            window.__redrawConnections?.();
-            window.__triggerSave?.();
+            window.__deleteConnection?.(t.connId);
         } else if (t.type === 'pin') {
-            const conn = window.__connections?.find(c => c.id === t.connId);
-            if (conn) { conn.waypoints.splice(t.wpIdx, 1); window.__redrawConnections?.(); window.__triggerSave?.(); }
+            window.__deleteWaypoint?.(t.connId, t.wpIdx);
         }
     });
 }());

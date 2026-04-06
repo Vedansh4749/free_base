@@ -3,123 +3,167 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Free Canvas Notepad</title>
+    <title>Free Canvas – by Vedansh</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600&display=swap" rel="stylesheet">
     <script src="https://unpkg.com/@phosphor-icons/web"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
     <div class="bg-gradient"></div>
 
-    <!-- Viewport clips the infinite canvas -->
-    <div id="viewport">
-        <div id="canvas">
-            <svg id="connection-layer" xmlns="http://www.w3.org/2000/svg">
-                <defs>
-                    <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-                        <polygon points="0 0, 10 3.5, 0 7" fill="rgba(255,255,255,0.55)" />
-                    </marker>
-                </defs>
-            </svg>
+    <!-- ═══════════════════════════════════════════════════════════
+         ROOM MANAGER (shown on startup, hidden once a room is entered)
+    ═══════════════════════════════════════════════════════════ -->
+    <div id="room-manager">
+        <div class="room-card">
+            <div class="room-logo"><i class="ph ph-paint-bucket"></i></div>
+            <h1 class="room-title">Free Canvas</h1>
+            <p class="room-sub">Create or join a shared, permanent workspace.</p>
+
+            <!-- Recent rooms -->
+            <div id="recent-rooms"></div>
+
+            <!-- Create -->
+            <button id="create-room-btn" class="room-primary-btn">
+                <i class="ph ph-plus-circle"></i> Create New Workspace
+            </button>
+
+            <div class="room-divider"><span>or join existing</span></div>
+
+            <!-- Join -->
+            <div class="room-input-grp">
+                <input type="text" id="join-code" placeholder="Enter room code (e.g. X7K-R9Q)"
+                    autocomplete="off" autocorrect="off" autocapitalize="characters" maxlength="8">
+                <button id="join-room-btn"><i class="ph ph-arrow-right"></i></button>
+            </div>
+            <p id="join-error" class="room-error hidden">Room not found. Check the code and try again.</p>
         </div>
+        <div class="room-footer">Built with ❤️ by Vedansh</div>
     </div>
 
-    <!-- Fixed UI – does not pan -->
-    <div id="ui-overlay">
-        <button id="calc-toggleBtn" title="Open Calculator"><i class="ph ph-calculator"></i></button>
-        <button id="exportBtn" title="Export Canvas to PDF"><i class="ph ph-download-simple"></i></button>
-        <div class="hint-text">Double-click: note &nbsp;│&nbsp; Ctrl+drag note: connect &nbsp;│&nbsp; Middle click / Shift+drag: pan &nbsp;│&nbsp; Ctrl+scroll: zoom</div>
-        <div class="zoom-indicator" id="zoom-indicator">100%</div>
-    </div>
+    <!-- ═══════════════════════════════════════════════════════════
+         APP CONTENT (hidden until a room is entered)
+    ═══════════════════════════════════════════════════════════ -->
+    <div id="app-content" class="hidden">
 
-    <!-- Floating Context Menu (for wires, pins, notes) -->
-    <div id="ctx-menu" class="hidden">
-        <div class="ctx-title" id="ctx-title">Options</div>
-        <button class="ctx-item" id="ctx-edit"><i class="ph ph-pencil-simple"></i> Edit Note</button>
-        <button class="ctx-item" id="ctx-color"><i class="ph ph-palette"></i> Change Color</button>
-        <button class="ctx-item ctx-sep" id="ctx-add-pin"><i class="ph ph-push-pin"></i> Add Pin Here</button>
-        <button class="ctx-item danger" id="ctx-delete"><i class="ph ph-trash"></i> Delete</button>
-    </div>
-
-    <!-- Calculator Widget -->
-    <div id="calculator-widget" class="hidden">
-        <div class="calc-header" id="calc-header">
-            <span>Calculator &amp; Notes</span>
-            <div class="calc-header-actions">
-                <button id="calc-budgetBtn" title="Budget Notes"><i class="ph ph-notebook"></i></button>
-                <button id="calc-historyBtn" title="History"><i class="ph ph-clock-counter-clockwise"></i></button>
-                <button id="calc-closeBtn" title="Close"><i class="ph ph-x"></i></button>
+        <!-- Viewport clips the infinite canvas -->
+        <div id="viewport">
+            <div id="canvas">
+                <svg id="connection-layer" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="rgba(255,255,255,0.55)" />
+                        </marker>
+                    </defs>
+                </svg>
             </div>
         </div>
 
-        <div id="calc-budgetPanel" class="calc-slide-panel hidden">
-            <div class="panel-label">Budget / Notes</div>
-            <textarea id="calc-budgetArea" placeholder="Write budget, expenses, context..."></textarea>
-            <button class="panel-action-btn" id="copy-budget-btn"><i class="ph ph-copy"></i> Copy Note</button>
+        <!-- Fixed UI – does not pan -->
+        <div id="ui-overlay">
+            <button id="calc-toggleBtn" title="Open Calculator"><i class="ph ph-calculator"></i></button>
+            <button id="exportBtn" title="Export Canvas to PDF"><i class="ph ph-download-simple"></i></button>
+            <!-- Room code badge -->
+            <div id="room-badge">
+                <i class="ph ph-users-three"></i>
+                <span id="room-code-display">----</span>
+                <button id="copy-room-code" title="Copy room code"><i class="ph ph-copy"></i></button>
+                <button id="leave-room-btn" title="Leave room"><i class="ph ph-sign-out"></i></button>
+            </div>
+            <div class="hint-text">Double-click: note &nbsp;│&nbsp; Ctrl+drag: connect &nbsp;│&nbsp; Middle / Shift+drag: pan &nbsp;│&nbsp; Ctrl+scroll: zoom &nbsp;│&nbsp; F: frame all</div>
+            <div class="zoom-indicator" id="zoom-indicator">100%</div>
         </div>
 
-        <div id="calc-historyPanel" class="calc-slide-panel hidden">
-            <div class="panel-label">Calculation History</div>
-            <div class="calc-history-list" id="calc-history-list"></div>
-            <button id="calc-clearHistoryBtn">Clear History</button>
+        <!-- Floating Context Menu -->
+        <div id="ctx-menu" class="hidden">
+            <div class="ctx-title" id="ctx-title">Options</div>
+            <button class="ctx-item" id="ctx-edit"><i class="ph ph-pencil-simple"></i> Edit Note</button>
+            <button class="ctx-item" id="ctx-color"><i class="ph ph-palette"></i> Change Color</button>
+            <button class="ctx-item ctx-sep" id="ctx-add-pin"><i class="ph ph-push-pin"></i> Add Pin Here</button>
+            <button class="ctx-item danger" id="ctx-delete"><i class="ph ph-trash"></i> Delete</button>
         </div>
 
-        <div class="calc-display-wrapper">
-            <div class="calc-expression" id="calc-expression"></div>
-            <div class="calc-display" id="calc-display">0</div>
-            <div class="calc-preview" id="calc-preview"></div>
-            <button class="copy-result-btn" id="copy-result-btn" title="Copy result"><i class="ph ph-copy"></i></button>
-        </div>
-
-        <div class="calc-grid">
-            <button class="calc-btn act-clear" data-action="clear">C</button>
-            <button class="calc-btn act-op" data-action="divide">÷</button>
-            <button class="calc-btn act-op" data-action="multiply">×</button>
-            <button class="calc-btn act-del" data-action="delete"><i class="ph ph-backspace"></i></button>
-            <button class="calc-btn num" data-val="7">7</button>
-            <button class="calc-btn num" data-val="8">8</button>
-            <button class="calc-btn num" data-val="9">9</button>
-            <button class="calc-btn act-op" data-action="subtract">−</button>
-            <button class="calc-btn num" data-val="4">4</button>
-            <button class="calc-btn num" data-val="5">5</button>
-            <button class="calc-btn num" data-val="6">6</button>
-            <button class="calc-btn act-op" data-action="add">+</button>
-            <button class="calc-btn num" data-val="1">1</button>
-            <button class="calc-btn num" data-val="2">2</button>
-            <button class="calc-btn num" data-val="3">3</button>
-            <button class="calc-btn act-equal" data-action="calculate">=</button>
-            <button class="calc-btn num span-2" data-val="0">0</button>
-            <button class="calc-btn num" data-val=".">.</button>
-        </div>
-    </div>
-
-    <!-- Note Template -->
-    <template id="note-template">
-        <div class="note" data-id="">
-            <div class="note-header">
-                <div class="note-drag-handle"><i class="ph ph-dots-six"></i></div>
-                <div class="note-actions">
-                    <button class="note-btn color-btn" title="Color"><i class="ph ph-palette"></i></button>
-                    <button class="note-btn delete-btn" title="Delete"><i class="ph ph-trash"></i></button>
+        <!-- Calculator Widget -->
+        <div id="calculator-widget" class="hidden">
+            <div class="calc-header" id="calc-header">
+                <span>Calculator &amp; Notes</span>
+                <div class="calc-header-actions">
+                    <button id="calc-budgetBtn" title="Budget Notes"><i class="ph ph-notebook"></i></button>
+                    <button id="calc-historyBtn" title="History"><i class="ph ph-clock-counter-clockwise"></i></button>
+                    <button id="calc-closeBtn" title="Close"><i class="ph ph-x"></i></button>
                 </div>
             </div>
-            <div class="note-content" contenteditable="true" placeholder="Type something..."></div>
-            <div class="note-resize-handle"><i class="ph ph-arrows-out-simple"></i></div>
-            <div class="color-picker hidden">
-                <div class="color-swatch" data-color="default"></div>
-                <div class="color-swatch" data-color="blue"></div>
-                <div class="color-swatch" data-color="purple"></div>
-                <div class="color-swatch" data-color="pink"></div>
-                <div class="color-swatch" data-color="green"></div>
-                <div class="color-swatch" data-color="yellow"></div>
+
+            <div id="calc-budgetPanel" class="calc-slide-panel hidden">
+                <div class="panel-label">Budget / Notes</div>
+                <textarea id="calc-budgetArea" placeholder="Write budget, expenses, context..."></textarea>
+                <button class="panel-action-btn" id="copy-budget-btn"><i class="ph ph-copy"></i> Copy Note</button>
+            </div>
+
+            <div id="calc-historyPanel" class="calc-slide-panel hidden">
+                <div class="panel-label">Calculation History</div>
+                <div class="calc-history-list" id="calc-history-list"></div>
+                <button id="calc-clearHistoryBtn">Clear History</button>
+            </div>
+
+            <div class="calc-display-wrapper">
+                <div class="calc-expression" id="calc-expression"></div>
+                <div class="calc-display" id="calc-display">0</div>
+                <div class="calc-preview" id="calc-preview"></div>
+                <button class="copy-result-btn" id="copy-result-btn" title="Copy result"><i class="ph ph-copy"></i></button>
+            </div>
+
+            <div class="calc-grid">
+                <button class="calc-btn act-clear" data-action="clear">C</button>
+                <button class="calc-btn act-op" data-action="divide">÷</button>
+                <button class="calc-btn act-op" data-action="multiply">×</button>
+                <button class="calc-btn act-del" data-action="delete"><i class="ph ph-backspace"></i></button>
+                <button class="calc-btn num" data-val="7">7</button>
+                <button class="calc-btn num" data-val="8">8</button>
+                <button class="calc-btn num" data-val="9">9</button>
+                <button class="calc-btn act-op" data-action="subtract">−</button>
+                <button class="calc-btn num" data-val="4">4</button>
+                <button class="calc-btn num" data-val="5">5</button>
+                <button class="calc-btn num" data-val="6">6</button>
+                <button class="calc-btn act-op" data-action="add">+</button>
+                <button class="calc-btn num" data-val="1">1</button>
+                <button class="calc-btn num" data-val="2">2</button>
+                <button class="calc-btn num" data-val="3">3</button>
+                <button class="calc-btn act-equal" data-action="calculate">=</button>
+                <button class="calc-btn num span-2" data-val="0">0</button>
+                <button class="calc-btn num" data-val=".">.</button>
             </div>
         </div>
-        </div>
-    </template>
+
+        <!-- Note Template -->
+        <template id="note-template">
+            <div class="note" data-id="">
+                <div class="note-header">
+                    <div class="note-drag-handle"><i class="ph ph-dots-six"></i></div>
+                    <div class="note-actions">
+                        <button class="note-btn color-btn" title="Color"><i class="ph ph-palette"></i></button>
+                        <button class="note-btn delete-btn" title="Delete"><i class="ph ph-trash"></i></button>
+                    </div>
+                </div>
+                <div class="note-content" contenteditable="true" placeholder="Type something..."></div>
+                <div class="note-resize-handle"><i class="ph ph-arrows-out-simple"></i></div>
+                <div class="color-picker hidden">
+                    <div class="color-swatch" data-color="default"></div>
+                    <div class="color-swatch" data-color="blue"></div>
+                    <div class="color-swatch" data-color="purple"></div>
+                    <div class="color-swatch" data-color="pink"></div>
+                    <div class="color-swatch" data-color="green"></div>
+                    <div class="color-swatch" data-color="yellow"></div>
+                </div>
+            </div>
+        </template>
+
+    </div><!-- end #app-content -->
 
     <script src="script.js"></script>
 </body>
